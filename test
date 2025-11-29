@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GMod Stream Code Generator</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font Configuration -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+        }
+    </style>
+    <!-- React, ReactDOM, and Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    
+    const apiKey = "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"; 
+    const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
+
+   
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+    // Helper for exponential backoff
+    const fetchWithRetry = async (url, options, retries = 3) => {
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await fetch(url, options);
+                if (response.ok) {
+                    return response;
+                }
+                // If response is not OK, maybe it's a 429 rate limit error, wait and retry
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000 + Math.random() * 1000));
+            } catch (error) {
+                // Handle network errors
+                if (i === retries - 1) throw error;
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000 + Math.random() * 1000));
+            }
+        }
+        throw new Error('API request failed after multiple retries.');
+    };
+
+    // --- Main Component ---
+    const App = () => {
+        const [mapName, setMapName] = useState('gm_construct');
+        const [chatRequest, setChatRequest] = useState('Spawn 5 headcrabs near the player and make them friendly.');
+        const [generatedCode, setGeneratedCode] = useState('');
+        const [isLoading, setIsLoading] = useState(false);
+        const [error, setError] = useState(null);
+        const [fullSystemPrompt, setFullSystemPrompt] = useState('');
+        const [copyMessage, setCopyMessage] = useState(''); // State for copy notification
+
+        // Define the core rules as the System Instruction
+        const baseSystemPrompt = `
+            You are an expert Garry's Mod Lua programmer. Your sole task is to generate a single, complete block of serverside Lua code that fulfills the user's request. 
+            
+            The code MUST NOT contain markdown or extra commentary, only the executable Lua script.
+            
+            Current Map Context: \${mapName}
+            
+            Ground Rules for Code Generation:
+            1. Keep effects temporary (a few seconds up to a minute). Use timers (timer.Simple) for disruptive or temporary effects (e.g., entity fading, physics changes) to automatically revert or clean up.
+            2. DO NOT crash the game (avoid loops without yield, massive resource spawns). Avoid real malicious activities. Joking/fake malicious actions (like displaying a fake IP address) are permitted.
+            3. Prevent softlocks. Any code that affects important game progress (e.g., required keys, exits, player movement) must revert or clean up after a brief timer. Hiding an entity should use a timer to show it again.
+            4. Tone down permanent cheaty actions. Make powerful buffs/spawns very temporary (e.g., invincibility for 5 seconds, gravity change for 10 seconds).
+            5. Use standard Garry's Mod/Half-Life 2 serverside functions (e.g., player.GetAll(), util.Blast, ents.Create, Entity:SetPos, Entity:Remove, timer.Simple).
+        `;
+
+        // Construct the final prompt for the LLM
+        const constructPrompt = useCallback(() => {
+            const fullPrompt = baseSystemPrompt.replace('\${mapName}', mapName);
+            setFullSystemPrompt(fullPrompt);
+            return fullPrompt;
+        }, [mapName]);
+
+        const handleGenerateCode = async () => {
+            if (!chatRequest.trim()) {
+                setError("Please enter a chat request.");
+                return;
+            }
+
+            // Check if API key is missing outside of Canvas
+            if (apiKey === "") {
+                setError("API Key Missing. If running on Neocities, you must manually insert your key in the 'apiKey' variable (insecurely) or deploy a proxy.");
+                setIsLoading(false);
+                return;
+            }
+
+            setIsLoading(true);
+            setError(null);
+            setGeneratedCode('');
+            const systemInstruction = constructPrompt();
+
+            const payload = {
+                contents: [{ 
+                    parts: [{ text: `Generate Lua code for this request: "${chatRequest}"` }] 
+                }],
+                systemInstruction: { 
+                    parts: [{ text: systemInstruction }] 
+                },
+            };
+
+            try {
+                const response = await fetchWithRetry(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    let code = candidate.content.parts[0].text;
+                    
+                    // Basic cleanup: Remove markdown fencing if present, though model should be instructed not to include it
+                    code = code.replace(/```lua\n?|```/g, '').trim(); 
+                    
+                    setGeneratedCode(code);
+                } else {
+                    console.error("API response error:", result);
+                    setError("Failed to generate code. Check API response structure.");
+                }
+
+            } catch (err) {
+                console.error('Fetch error:', err);
+                // Note: This error is often the CORS block itself.
+                setError(`Network or API error: ${err.message}. If running outside Canvas, check CORS and API Key.`);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        
+        const handleCopyCode = () => {
+            // Fallback for clipboard access in some environments
+            const tempArea = document.createElement('textarea');
+            tempArea.value = generatedCode;
+            document.body.appendChild(tempArea);
+            tempArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempArea);
+
+            setCopyMessage('Code copied to clipboard!');
+            setTimeout(() => setCopyMessage(''), 3000); // Clear message after 3 seconds
+        };
+
+
+        // Style constants for Tailwind classes
+        const containerClasses = "max-w-4xl mx-auto p-4 md:p-8 bg-gray-900 min-h-screen text-white font-inter";
+        const cardClasses = "bg-gray-800 p-6 rounded-xl shadow-2xl mb-6";
+        const inputClasses = "w-full p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out";
+        const buttonClasses = "w-full py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg transition duration-150 ease-in-out disabled:bg-gray-500 disabled:cursor-not-allowed flex items-center justify-center";
+        const codeClasses = "p-4 bg-black text-lime-400 rounded-lg overflow-x-auto text-sm shadow-inner";
+        const titleClasses = "text-3xl font-extrabold mb-2 text-blue-400";
+        const subtitleClasses = "text-lg text-gray-400 mb-6";
+
+        return (
+            <div className={containerClasses}>
+                <header className="text-center mb-10">
+                    <h1 className={titleClasses}>GMod Stream Control</h1>
+                    <p className={subtitleClasses}>AI-Generated Lua Code from Chat Requests</p>
+                </header>
+
+                <div className={cardClasses}>
+                    <h2 className="text-xl font-semibold mb-4 text-white">1. Input Stream Data</h2>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-300">
+                                Current GMod Map Name (Context for AI)
+                            </label>
+                            <input
+                                type="text"
+                                value={mapName}
+                                onChange={(e) => setMapName(e.target.value)}
+                                className={inputClasses}
+                                placeholder="e.g., gm_construct, d1_trainstation_01"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-300">
+                                Chat Request / Command
+                            </label>
+                            <textarea
+                                value={chatRequest}
+                                onChange={(e) => setChatRequest(e.target.value)}
+                                className={`${inputClasses} h-24`}
+                                placeholder="e.g., Make the gravity really low for 10 seconds."
+                            />
+                        </div>
+                        <button 
+                            onClick={handleGenerateCode} 
+                            className={buttonClasses} 
+                            disabled={isLoading}
+                        >
+                            {isLoading ? (
+                                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                            ) : 'Generate Lua Code'}
+                        </button>
+                        {error && (
+                            <div className="p-3 bg-red-800 text-white rounded-lg border border-red-600">
+                                Error: {error}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                
+                <div className={cardClasses}>
+                    <h2 className="text-xl font-semibold mb-4 text-white">2. Generated Lua Code (Output)</h2>
+                    {generatedCode ? (
+                        <div className="space-y-4">
+                            <pre className={codeClasses}>
+                                {generatedCode}
+                            </pre>
+                            <button 
+                                onClick={handleCopyCode}
+                                className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg transition duration-150 ease-in-out"
+                            >
+                                Copy Code
+                            </button>
+                            <p className="text-sm text-gray-400 mt-2">
+                                This is the serverside Lua script ready to be sent to your GMod server.
+                            </p>
+                        </div>
+                    ) : (
+                        <p className="text-gray-400">Code will appear here after generation.</p>
+                    )}
+                </div>
+
+                <div className={cardClasses}>
+                    <h2 className="text-xl font-semibold mb-4 text-white">3. System Prompt Used (Reference)</h2>
+                    <pre className={`${codeClasses} text-gray-300`}>
+                        {fullSystemPrompt || "System prompt generated upon first generation."}
+                    </pre>
+                    <p className="text-sm text-gray-400 mt-2">
+                        This instruction set, including your specific ground rules, guides the AI model.
+                    </p>
+                </div>
+                
+                {/* Custom Copy Notification */}
+                {copyMessage && (
+                    <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 bg-green-600 text-white font-medium rounded-xl shadow-2xl z-50 animate-bounce">
+                        {copyMessage}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // Render the main component
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<App />);
+</script>
+
+</body>
+</html>
