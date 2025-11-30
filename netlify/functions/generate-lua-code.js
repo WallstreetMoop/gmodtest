@@ -1,14 +1,11 @@
 /*
-  This Netlify Function acts as a secure proxy:
-  1. It receives the API payload (user prompt + system instruction) from the client (index.html).
-  2. It securely adds the GEMINI_API_KEY from Netlify environment variables.
-  3. It makes the API call to Google.
-  4. It returns the generated Lua code to the client, resolving CORS issues.
+  This Netlify Function acts as a secure proxy, configured for OpenRouter compatibility.
+  It transforms the Gemini-style payload from the client into the OpenAI/OpenRouter format.
 */
 const fetch = require('node-fetch');
 
-// The base URL for the Gemini API
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+// Base URL for OpenRouter's standard chat completions endpoint
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Helper for error responses
 const buildErrorResponse = (statusCode, message) => ({
@@ -27,12 +24,13 @@ exports.handler = async (event) => {
     }
 
     // 1. Get API Key and Validate
-    const apiKey = process.env.GEMINI_API_KEY;
+    // This key must now be an OpenRouter key
+    const apiKey = process.env.GEMINI_API_KEY; 
     if (!apiKey) {
-        return buildErrorResponse(500, 'Server configuration error: GEMINI_API_KEY not set.');
+        return buildErrorResponse(500, 'Server configuration error: GEMINI_API_KEY (OpenRouter Key) not set.');
     }
     
-    // 2. Parse the request body from the frontend
+    // 2. Parse the request body from the frontend (Gemini format)
     let incomingPayload;
     try {
         incomingPayload = JSON.parse(event.body);
@@ -40,25 +38,48 @@ exports.handler = async (event) => {
         return buildErrorResponse(400, 'Invalid JSON body in request.');
     }
 
-    const modelName = incomingPayload.model || 'gemini-2.5-flash-preview-09-2025';
-    const apiUrl = `${GEMINI_BASE_URL}${modelName}:generateContent?key=${apiKey}`;
+    // Default to a highly capable, fast model on OpenRouter
+    const modelName = incomingPayload.model || 'google/gemini-2.5-flash';
+    
+    // 3. Transform the incoming Gemini payload into the OpenRouter/OpenAI format
+    const messages = [];
 
-    // 3. IMPORTANT: Construct the FINAL payload sent to the Google API
-    // This ensures ONLY the required keys are present to prevent 400 errors.
+    // Add System Instruction (if present)
+    const systemInstruction = incomingPayload.systemInstruction?.parts?.[0]?.text;
+    if (systemInstruction) {
+        messages.push({
+            role: "system",
+            content: systemInstruction,
+        });
+    }
+
+    // Add User Content (assuming one part per conversation for this app)
+    const userContent = incomingPayload.contents?.[0]?.parts?.[0]?.text;
+    if (userContent) {
+        messages.push({
+            role: "user",
+            content: userContent,
+        });
+    }
+
+    // Construct the FINAL OpenRouter payload
     const finalApiPayload = {
-        contents: incomingPayload.contents,
-        systemInstruction: incomingPayload.systemInstruction,
-        // Add generationConfig if the client sends it, otherwise ignore
-        ...(incomingPayload.generationConfig && { generationConfig: incomingPayload.generationConfig })
+        model: modelName,
+        messages: messages,
+        // Add additional settings if needed, like temperature: 0.7
     };
 
 
-    // 4. Call the Gemini API securely
+    // 4. Call OpenRouter API securely
     try {
-        const response = await fetch(apiUrl, {
+        const response = await fetch(OPENROUTER_API_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            // Use the cleaned finalApiPayload
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`, // Key passed via Authorization header
+                'HTTP-Referer': event.headers.host, // Required by OpenRouter for usage tracking
+            },
+            // Use the transformed payload
             body: JSON.stringify(finalApiPayload) 
         });
 
@@ -66,18 +87,19 @@ exports.handler = async (event) => {
         const result = await response.json();
         
         if (!response.ok) {
-            // Log the error from Google API for debugging in Netlify logs
-            console.error("Google API Error:", result);
-            const errorMessage = result.error?.message || 'Gemini API returned an error.';
+            // Log the error from OpenRouter for debugging in Netlify logs
+            console.error("OpenRouter API Error:", result);
+            const errorMessage = result.message || result.error?.message || 'OpenRouter API returned an error.';
             return buildErrorResponse(response.status, errorMessage);
         }
 
-        const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        // OpenRouter uses the OpenAI format: choices[0].message.content
+        const generatedText = result.choices?.[0]?.message?.content;
 
         if (!generatedText) {
             // Log if content is unexpectedly empty
             console.error("API response missing text content:", result);
-            return buildErrorResponse(500, 'Failed to extract generated Lua code from API response.');
+            return buildErrorResponse(500, 'Failed to extract generated Lua code from OpenRouter response.');
         }
 
         // 5. Return the raw Lua code text to the frontend
