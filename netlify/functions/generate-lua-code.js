@@ -1,129 +1,117 @@
-/*
-  This Netlify Function acts as a secure proxy, configured for OpenRouter compatibility.
-  It transforms the Gemini-style payload from the client into the OpenAI/OpenRouter format.
-*/
-const fetch = require('node-fetch');
+// Netlify Function to proxy requests to OpenRouter for Lua code generation
+// This function handles API Key security and ensures the payload format is correct (OpenAI/Chat style)
 
-// Base URL for OpenRouter's standard chat completions endpoint
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// The OpenRouter endpoint for chat completions
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const MODEL = 'openai/gpt-4o-mini'; // A fast, capable model suitable for code generation
 
-// Helper for error responses
-const buildErrorResponse = (statusCode, message) => ({
-    statusCode,
-    body: JSON.stringify({ message }),
-    headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*', // Enable CORS for Netlify
-    },
-});
+// --- System Instruction ---
+// This is the core logic that guides the AI's response.
+// It is embedded directly in the Netlify Function for security and consistency.
+const systemInstruction = `
+You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole task is to generate a single, complete block of Lua code for execution on a GMod server based on the user's request.
+
+**CONTEXT:** The code will be executed in a live Half-Life 2 playthrough for a stream.
+**GOAL:** Create fun, engaging, and temporary effects that react to chat input.
+
+**GROUND RULES FOR LUA CODE GENERATION:**
+1.  **Scope:** Only generate serverside Lua code that targets the player entity (accessible via 'player.GetAll()[1]' or 'FindPlayer(0)'). Never use client-side functions like 'LocalPlayer()' or 'chat.AddText'.
+2.  **Player Access:** Always safely check for the player: 'local ply = player.GetAll()[1]; if not IsValid(ply) then return end'.
+3.  **Effect Duration (CRITICAL):** All disruptive, fun, or 'cheaty' effects **MUST** be temporary and automatically revert. Use the 'timer.Simple' function to clean up effects.
+    * *Example:* If changing gravity, reset it after 10-30 seconds.
+    * *Example:* If deleting or moving a key prop, use 'timer.Simple' to move it back or respawn it after a few seconds to prevent softlocks.
+4.  **Safety:** Code must NEVER crash the server, close the game, or perform malicious actions (e.g., permanent file modification, API calls). Fake, temporary disruptions (like a joke "dox" on the HUD) are acceptable.
+5.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string.
+6.  **Style:** Keep the code concise and well-commented for clarity.
+`;
+
+// Helper function to decode and parse the Netlify event body
+const getRequestBody = (event) => {
+    let body = event.body;
+    if (event.isBase64Encoded) {
+        body = Buffer.from(body, 'base64').toString('utf8');
+    }
+    return JSON.parse(body);
+};
+
 
 exports.handler = async (event) => {
-    // Only allow POST requests
     if (event.httpMethod !== 'POST') {
-        return buildErrorResponse(405, 'Method Not Allowed');
+        return { statusCode: 405, body: 'Method Not Allowed' };
     }
 
-    // 1. Get API Key and Validate
-    const apiKey = process.env.GEMINI_API_KEY; 
-    if (!apiKey) {
-        return buildErrorResponse(500, 'Server configuration error: GEMINI_API_KEY (OpenRouter Key) not set.');
-    }
-    
-    // 2. Parse the request body from the frontend (Gemini format)
-    let incomingPayload;
     try {
-        incomingPayload = JSON.parse(event.body);
-    } catch (e) {
-        return buildErrorResponse(400, 'Invalid JSON body in request.');
-    }
+        const { prompt } = getRequestBody(event);
 
-    // --- FIX START: Force OpenRouter Compatible Model Name ---
-    // The client sends the Google-specific model name (e.g., 'gemini-2.5-flash-preview-09-2025').
-    // We must map it to the OpenRouter equivalent to avoid the 400 error.
-    const modelMap = {
-        'gemini-2.5-flash-preview-09-2025': 'google/gemini-2.5-flash',
-        'gemini-2.5-flash': 'google/gemini-2.5-flash',
-        // Add other models if needed, e.g., 'gemini-2.5-pro': 'google/gemini-2.5-pro'
-    };
-
-    const requestedModel = incomingPayload.model;
-    const modelName = modelMap[requestedModel] || 'google/gemini-2.5-flash';
-    // --- FIX END ---
-    
-    // 3. Transform the incoming Gemini payload into the OpenRouter/OpenAI format
-    const messages = [];
-
-    // Add System Instruction (if present)
-    const systemInstruction = incomingPayload.systemInstruction?.parts?.[0]?.text;
-    if (systemInstruction) {
-        messages.push({
-            role: "system",
-            content: systemInstruction,
-        });
-    }
-
-    // Add User Content (assuming one part per conversation for this app)
-    const userContent = incomingPayload.contents?.[0]?.parts?.[0]?.text;
-    if (userContent) {
-        messages.push({
-            role: "user",
-            content: userContent,
-        });
-    }
-
-    // Construct the FINAL OpenRouter payload
-    const finalApiPayload = {
-        model: modelName, // Use the mapped model name
-        messages: messages,
-        // Optional: Ensure the model knows we want pure text
-        // stream: false, // Netlify functions can't easily stream
-    };
-
-
-    // 4. Call OpenRouter API securely
-    try {
-        const response = await fetch(OPENROUTER_API_URL, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`, // Key passed via Authorization header
-                'HTTP-Referer': event.headers.host, // Required by OpenRouter for usage tracking
-            },
-            // Use the transformed payload
-            body: JSON.stringify(finalApiPayload) 
-        });
-
-        // Get the full response body
-        const result = await response.json();
-        
-        if (!response.ok) {
-            // Log the error from OpenRouter for debugging in Netlify logs
-            console.error("OpenRouter API Error:", result);
-            const errorMessage = result.message || result.error?.message || 'OpenRouter API returned an error.';
-            return buildErrorResponse(response.status, errorMessage);
+        if (!prompt) {
+             return {
+                statusCode: 400,
+                body: JSON.stringify({ error: 'Missing "prompt" in request body.' }),
+            };
         }
 
-        // OpenRouter uses the OpenAI format: choices[0].message.content
-        const generatedText = result.choices?.[0]?.message?.content;
-
-        if (!generatedText) {
-            // Log if content is unexpectedly empty
-            console.error("API response missing text content:", result);
-            return buildErrorResponse(500, 'Failed to extract generated Lua code from OpenRouter response.');
-        }
-
-        // 5. Return the raw Lua code text to the frontend
-        return {
-            statusCode: 200,
-            body: generatedText,
-            headers: {
-                'Content-Type': 'text/plain',
-                'Access-Control-Allow-Origin': '*',
-            },
+        const openRouterPayload = {
+            model: MODEL,
+            messages: [
+                { role: "system", content: systemInstruction },
+                { role: "user", content: prompt }
+            ]
+            // Add stream: false if not using streaming
         };
 
-    } catch (e) {
-        console.error('API Proxy Fetch Failure:', e);
-        return buildErrorResponse(500, `Internal server error during API call: ${e.message}`);
+        const apiKey = process.env.GEMINI_API_KEY; // Using the key set for OpenRouter
+
+        if (!apiKey) {
+             return {
+                statusCode: 500,
+                body: JSON.stringify({ error: 'API Key (GEMINI_API_KEY) not configured.' }),
+            };
+        }
+
+        // --- OpenRouter Fetch Call ---
+        const response = await fetch(OPENROUTER_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                // OpenRouter optional header to identify the user/app
+                'HTTP-Referer': 'https://gmod-stream-director.netlify.app' 
+            },
+            body: JSON.stringify(openRouterPayload)
+        });
+
+        if (!response.ok) {
+            // Read the error from OpenRouter's response body
+            const errorBody = await response.json();
+            console.error('OpenRouter Error:', errorBody);
+
+            return {
+                statusCode: response.status,
+                body: JSON.stringify({ 
+                    error: 'OpenRouter API Request Failed', 
+                    details: errorBody.error?.message || errorBody
+                }),
+            };
+        }
+
+        const data = await response.json();
+        
+        // Extract the generated code (which should be the raw Lua string)
+        const luaCode = data.choices[0]?.message?.content?.trim() || 
+                       '// Error: AI returned no code. Try a different prompt.';
+
+        // The frontend expects an object with a 'code' property
+        return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: luaCode }),
+        };
+
+    } catch (error) {
+        console.error('Function execution error:', error);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: 'Internal Server Error', details: error.message }),
+        };
     }
 };
