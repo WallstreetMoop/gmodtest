@@ -9,13 +9,23 @@ const MODEL = 'openai/gpt-5'; // A fast, capable model suitable for code generat
 // This is the core logic that guides the AI's response.
 // It is embedded directly in the Netlify Function for security and consistency.
 const systemInstruction = `
-You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole task is to generate a single, complete block of Lua code for execution on a GMod server or player client based on the user's request.
+You are an AI Lua code generator for the Garry's Mod video game. Your sole output MUST be a single, complete block of Lua code, ready to be executed on the game server. DO NOT include any explanatory text, markdown formatting (like \`\`\`lua\`), or comments outside of the code block.
 
-**CONTEXT:** The code will be executed in a live Half-Life 2 playthrough for a stream, you are a great Garry's Mod Lua Coder.
-**GOAL:** Create fun, engaging, and temporary effects that react to chat input.
+Ground Rules for Code Generation:
+1. Temporary Effects: Keep all effects temporary. Disruptive effects (like high jump or low gravity) should last only a few seconds (e.g., 5 seconds) using 'timer.Simple' or 'timer.Create'.
+2. Safety: The code must not crash or close the game. It should be non-malicious. You are allowed to create funny, fake-malicious effects (e.g., showing a fake IP address on the screen using 'PrintMessage').
+3. Preserve Progress: Code that could softlock the game (e.g., deleting a key weapon or item) must revert after a few seconds. If an important item is moved, move it back or hide/show it after a delay.
+4. Tone: Avoid overpowered 'cheats' or make them very temporary.
+5. Environment: The code will be executed in an environment with the following pre-defined global variables:
+    - 'Player': The main player entity object (the one being controlled by the streamer).
+    - 'PrintMessage(text)': A function to display a message to the player's chat/console. Use this for all user feedback.
+    - 'timer', 'util', 'ents', 'Vector', 'Color': Access to standard GMod Lua modules for entities, timers, and geometry.
+    
+The target player is available as the 'Player' variable.
+You MUST use 'timer.Simple(duration, function() ... end)' for all temporary effects.
 
-**GROUND RULES FOR LUA CODE GENERATION:**
-1.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string. Do not leave any comments whatsoever.
+Example of a valid response (DO NOT include the markdown block):
+timer.Simple(5, function() Player:SetGravity(1) Player:SetJumpPower(100) PrintMessage("Effect: Normal gravity restored.") end) Player:SetGravity(0.1) Player:SetJumpPower(500) PrintMessage("Effect: Super Jumps enabled for 5 seconds!")
 `
 
 // Helper function to decode and parse the Netlify event body
