@@ -1,9 +1,10 @@
-// Netlify Function to proxy requests to the Gemini API for Lua code generation.
-// This function uses structured JSON output to guarantee clean, raw Lua code.
+// Netlify Function to proxy requests to OpenRouter for Lua code generation.
+// This function uses the standard OpenAI Chat Completions format (required by OpenRouter).
 
-const GEMINI_ENDPOINT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
-const MODEL = 'gemini-2.5-flash-preview-09-2025';
-const FETCH_URL = `${GEMINI_ENDPOINT_BASE}${MODEL}:generateContent`;
+// The OpenRouter endpoint for chat completions
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+// Choose a suitable, fast model for code generation on OpenRouter
+const MODEL = 'openai/gpt-3.5-turbo'; 
 
 // Ensure we are using node-fetch for compatibility
 const fetch = require('node-fetch');
@@ -11,14 +12,13 @@ const fetch = require('node-fetch');
 // --- System Instruction ---
 // This instruction tells the AI how to act and what structure to use.
 const systemInstruction = `
-You are an AI Lua code generator for the Garry's Mod video game. Your sole purpose is to respond with a JSON object containing the requested Lua code.
+You are an AI Lua code generator for the Garry's Mod video game. Your sole output MUST be a single, complete block of Lua code, ready to be executed on the game server. DO NOT include any explanatory text, markdown formatting (like \`\`\`lua\`\`), or comments outside of the code block.
 
 Ground Rules for Code Generation:
-1. Output format MUST be a single JSON object matching the provided schema, with the generated Lua code inside the 'lua_code' field. DO NOT include any explanatory text outside the JSON object.
-2. Temporary Effects: Keep all effects temporary. Disruptive effects (like high jump or low gravity) should last only a few seconds (e.g., 5-10 seconds) using 'timer.Simple' or 'timer.Create'.
-3. Safety: The code must not crash or close the game. It should be non-malicious. You are allowed to create funny, fake-malicious effects (e.g., showing a fake IP address on the screen using 'PrintMessage').
-4. Preserve Progress: Code that could softlock the game (e.g., deleting a key weapon or item) must revert after a few seconds. If an important item is moved, move it back or hide/show it after a delay.
-5. Use the provided execution environment globals: 'Player', 'ply', 'PrintMessage', 'timer', 'util', 'ents', 'Vector', and 'Color'. Use 'ply:SetJumpPower(500)' instead of 'game.ConsoleCommand("sv_gravity 100")' for player-specific effects.
+1. Temporary Effects: Keep all effects temporary. Disruptive effects (like high jump or low gravity) should last only a few seconds (e.g., 5-10 seconds) using 'timer.Simple' or 'timer.Create'.
+2. Safety: The code must not crash or close the game. It should be non-malicious. You are allowed to create funny, fake-malicious effects (e.g., showing a fake IP address on the screen using 'PrintMessage').
+3. Preserve Progress: Code that could softlock the game (e.g., deleting a key weapon or item) must revert after a few seconds. If an important item is moved, move it back or hide/show it after a delay.
+4. Use the provided execution environment globals: 'Player', 'ply', 'PrintMessage', 'timer', 'util', 'ents', 'Vector', and 'Color'. Use 'ply:SetJumpPower(500)' instead of 'game.ConsoleCommand("sv_gravity 100")' for player-specific effects.
 `;
 
 // Helper function to decode and parse the Netlify event body
@@ -37,12 +37,9 @@ exports.handler = async (event) => {
             return { statusCode: 405, body: 'Method Not Allowed' };
         }
 
-        // The key for the Gemini API
+        // The key for the OpenRouter API (often stored as an OpenAI key)
         const apiKey = process.env.GEMINI_API_KEY; 
         
-        // IMPORTANT: Use the apiKey query parameter for the Canvas API endpoint
-        const apiQueryUrl = `${FETCH_URL}?key=${apiKey}`;
-
         if (!apiKey) {
              return {
                 statusCode: 500,
@@ -56,46 +53,39 @@ exports.handler = async (event) => {
             return { statusCode: 400, body: JSON.stringify({ error: 'Missing "prompt" in request body.' }) };
         }
         
-        // --- Gemini API Payload for Structured JSON Output ---
-        const geminiPayload = {
-            contents: [{ 
-                role: 'user', 
-                parts: [{ text: `Generate the Lua code for the following command: ${prompt}` }] 
-            }],
-            config: {
-                // Set the model's persona and rules
-                systemInstruction: systemInstruction,
-                // Force the model to output a specific JSON structure
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        "lua_code": { 
-                            "type": "STRING", 
-                            "description": "The complete, raw Lua code block without any surrounding markdown or comments." 
-                        }
-                    },
-                    "propertyOrdering": ["lua_code"]
-                }
-            },
+        // --- OpenRouter/OpenAI API Payload ---
+        const openRouterPayload = {
+            model: MODEL,
+            messages: [
+                { role: "system", content: systemInstruction },
+                { role: "user", content: `Generate the Lua code for the following command: ${prompt}` }
+            ],
+            // Set temperature to 0.7 for creative but structured code
+            temperature: 0.7, 
+            stream: false
         };
 
-        const response = await fetch(apiQueryUrl, {
+        const response = await fetch(OPENROUTER_ENDPOINT, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
+                // OpenRouter uses the Authorization header with a Bearer token
+                'Authorization': `Bearer ${apiKey}`,
+                // OpenRouter optional header to identify the user/app
+                'HTTP-Referer': 'https://gmod-stream-director.netlify.app' // Replace with your actual deployed URL
             },
-            body: JSON.stringify(geminiPayload)
+            body: JSON.stringify(openRouterPayload)
         });
 
         if (!response.ok) {
+            // Read the error from OpenRouter's response body
             const errorBody = await response.json();
-            console.error('Gemini API Error:', errorBody);
+            console.error('OpenRouter Error:', errorBody);
 
             return {
                 statusCode: response.status,
                 body: JSON.stringify({ 
-                    error: 'Gemini API Request Failed', 
+                    error: 'OpenRouter API Request Failed', 
                     details: errorBody.error?.message || errorBody
                 }),
             };
@@ -103,23 +93,9 @@ exports.handler = async (event) => {
 
         const data = await response.json();
         
-        // The structured response is in part[0].text as a stringified JSON object
-        const jsonString = data.candidates[0]?.content?.parts[0]?.text;
-        
-        if (!jsonString) {
-            const fallbackCode = `// Error: AI returned no parsable JSON. Response: ${JSON.stringify(data)}`;
-            return {
-                statusCode: 500,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code: fallbackCode }),
-            };
-        }
-
-        // Parse the structured JSON output
-        const parsedData = JSON.parse(jsonString);
-        
-        // Extract the raw Lua code
-        const luaCode = parsedData.lua_code?.trim() || '// Error: AI returned empty code.';
+        // Extract the generated code (which should be the raw Lua string)
+        const luaCode = data.choices[0]?.message?.content?.trim() || 
+                       '// Error: AI returned no code. Try a different prompt.';
 
         // The frontend expects an object with a 'code' property
         return {
