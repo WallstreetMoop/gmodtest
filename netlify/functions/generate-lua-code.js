@@ -15,8 +15,7 @@ You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole tas
 **GOAL:** Create fun, engaging, and temporary effects that react to chat input.
 
 **GROUND RULES FOR LUA CODE GENERATION:**
-1.  **Player Access:** Always safely check for the player: 'local ply = player.GetAll()[1]; if not IsValid(ply) then return end'.
-2.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string. Do not leave any comments whatsoever.
+1.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string. Do not leave any comments whatsoever.
 `
 
 // Helper function to decode and parse the Netlify event body
