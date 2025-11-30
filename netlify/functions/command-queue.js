@@ -22,7 +22,7 @@ const getRequestBody = (event) => {
 exports.handler = async (event) => {
     try {
         if (event.httpMethod === 'POST') {
-            // --- POST: Queue/Write the new command ---
+            // --- POST: Queue/Write the new command (from the web frontend) ---
             const { code } = getRequestBody(event);
 
             if (!code) {
@@ -45,20 +45,28 @@ exports.handler = async (event) => {
             // --- GET: Dequeue/Read the latest command (for GMod Poller) ---
 
             const luaCode = commandQueue.luaCode || '';
+            const timestamp = commandQueue.timestamp;
+            
+            // Build the JSON object to send to GMod
+            const responseData = {
+                code: luaCode,
+                timestamp: timestamp,
+                message: luaCode ? "Command found." : "No new command."
+            };
 
             // If there is code, send it, and then clear the queue immediately.
             if (luaCode) {
                 // CLEAR THE COMMAND AFTER SENDING IT TO ENSURE SINGLE EXECUTION
                 commandQueue.luaCode = '';
+                commandQueue.timestamp = null;
                 console.log('Successfully served and cleared Lua command from memory.');
             }
 
-            // The GMod poller expects the raw Lua code string, not JSON.
-            // We return a plaintext response.
+            // NEW: Return JSON format for the GMod poller
             return {
                 statusCode: 200,
-                headers: { 'Content-Type': 'text/plain' },
-                body: luaCode,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(responseData),
             };
 
         } else {
