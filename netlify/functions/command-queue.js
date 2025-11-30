@@ -1,79 +1,68 @@
-/*
-  Netlify Function to manage the GMod command queue.
-  - POST: Called by the web client to save a new command.
-  - GET: Called by the GMod server (http.Fetch) to retrieve the latest command.
-*/
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+// Netlify Function to handle POST (Queue) and GET (Dequeue) operations for GMod commands.
+// This version uses an in-memory variable, eliminating external API dependencies (like Firestore).
+// WARNING: Data is NOT persistent across cold starts/function restarts.
 
-const COMMAND_KEY = ["gmod_ai", "latest_command"];
-const EMPTY_COMMAND_TEXT = "-- No command currently queued. --";
+// A simple in-memory store for the latest command.
+// This variable persists across requests handled by the same 'hot' function instance.
+let commandQueue = {
+    luaCode: '',
+    timestamp: null
+};
 
-// Helper for error responses
-const buildErrorResponse = (statusCode, message) => new Response(
-    JSON.stringify({ message }),
-    {
-        status: statusCode,
-        headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-        },
+// Helper function to decode and parse the Netlify event body
+const getRequestBody = (event) => {
+    let body = event.body;
+    if (event.isBase64Encoded) {
+        body = Buffer.from(body, 'base64').toString('utf8');
     }
-);
-
-// Helper for success response (used by the GMod server)
-const buildSuccessResponse = (body, contentType = 'text/plain') => new Response(
-    body,
-    {
-        status: 200,
-        headers: {
-            'Content-Type': contentType,
-            'Access-Control-Allow-Origin': '*',
-        },
-    }
-);
+    return JSON.parse(body);
+};
 
 
-// Netlify/Deno handler function
-export default async (req) => {
+exports.handler = async (event) => {
     try {
-        // Open the key-value store (Deno.Kv is automatically initialized by Netlify)
-        const kv = await Deno.openKv();
-        const method = req.method;
-        
-        switch (method) {
-            case 'POST': {
-                // 1. Client wants to save a new command
-                const newCommand = await req.text();
+        if (event.httpMethod === 'POST') {
+            // --- POST: Queue/Write the new command ---
+            const { code } = getRequestBody(event);
 
-                if (!newCommand || newCommand.trim().length < 5) {
-                    return buildErrorResponse(400, "Command body is empty or too short.");
-                }
-
-                // Save the new command string
-                await kv.set(COMMAND_KEY, newCommand);
-
-                // Optional: Save the timestamp for debugging
-                await kv.set(["gmod_ai", "last_updated"], new Date().toISOString());
-
-                return buildSuccessResponse(`Command successfully queued: ${newCommand.substring(0, 50)}...`);
+            if (!code) {
+                return { statusCode: 400, body: JSON.stringify({ error: 'Missing "code" in request body.' }) };
             }
 
-            case 'GET': {
-                // 2. GMod server is polling for the latest command
-                const result = await kv.get(COMMAND_KEY);
+            // Store the new Lua code in memory
+            commandQueue.luaCode = code;
+            commandQueue.timestamp = new Date().toISOString();
 
-                const commandToReturn = result.value || EMPTY_COMMAND_TEXT;
+            console.log('Successfully queued new Lua command in memory.');
 
-                // Return the raw Lua code string directly (text/plain)
-                return buildSuccessResponse(commandToReturn, 'text/plain');
-            }
+            return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: 'Command queued successfully (in-memory).' }),
+            };
 
-            default:
-                return buildErrorResponse(405, 'Method Not Allowed');
+        } else if (event.httpMethod === 'GET') {
+            // --- GET: Dequeue/Read the latest command (for GMod Poller) ---
+
+            const luaCode = commandQueue.luaCode || '';
+
+            // The GMod poller expects the raw Lua code string, not JSON.
+            // We return a plaintext response.
+            return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'text/plain' },
+                body: luaCode,
+            };
+
+        } else {
+            return { statusCode: 405, body: 'Method Not Allowed' };
         }
 
-    } catch (e) {
-        console.error("Queue Handler Error:", e);
-        return buildErrorResponse(500, `Internal Server Error: ${e.message}`);
+    } catch (error) {
+        console.error('Function execution error:', error);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: 'Internal Server Error', details: error.message }),
+        };
     }
 };
