@@ -1,0 +1,9 @@
+{
+  "name": "gmod-code-generator-netlify",
+  "version": "1.0.0",
+  "description": "A secure proxy for the Gemini API using Netlify Functions.",
+  "main": "netlify/functions/generate-lua-code.js",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
