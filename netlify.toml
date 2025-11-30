@@ -6,7 +6,11 @@
   # The directory to publish (where index.html lives)
   publish = "/"
 
+[build.environment]
+  # Set Node.js version using an environment variable for better compatibility
+  NODE_VERSION = "18"
+
 [functions]
-  # Define the Node.js version to use for compatibility
+  # Use esbuild for bundling (recommended for speed)
   node_bundler = "esbuild"
-  node_major_version = 18
+  # The 'node_major_version' is now handled by the build environment setting above
