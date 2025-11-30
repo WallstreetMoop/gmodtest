@@ -26,12 +26,12 @@
 <script type="text/babel">
     const { useState, useEffect, useCallback } = React;
 
-    
-    const apiKey = "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"; 
+    // --- API Configuration ---
+    // The API key is now securely stored on Netlify's server and handled by the function.
+    // The frontend calls the Netlify Function endpoint directly.
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-
-   
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+    // This is the endpoint for the Netlify Function we will create in the next file.
+    const apiUrl = '/.netlify/functions/generate-lua-code'; 
 
     // Helper for exponential backoff
     const fetchWithRetry = async (url, options, retries = 3) => {
@@ -91,18 +91,12 @@
                 return;
             }
 
-            // Check if API key is missing outside of Canvas
-            if (apiKey === "") {
-                setError("API Key Missing. If running on Neocities, you must manually insert your key in the 'apiKey' variable (insecurely) or deploy a proxy.");
-                setIsLoading(false);
-                return;
-            }
-
             setIsLoading(true);
             setError(null);
             setGeneratedCode('');
             const systemInstruction = constructPrompt();
 
+            // The payload sent to the Netlify Function (Proxy)
             const payload = {
                 contents: [{ 
                     parts: [{ text: `Generate Lua code for this request: "${chatRequest}"` }] 
@@ -110,34 +104,43 @@
                 systemInstruction: { 
                     parts: [{ text: systemInstruction }] 
                 },
+                model: GEMINI_MODEL
             };
 
             try {
+                // Call the Netlify Function
                 const response = await fetchWithRetry(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
-                const result = await response.json();
-                const candidate = result.candidates?.[0];
+                const resultText = await response.text();
 
-                if (candidate && candidate.content?.parts?.[0]?.text) {
-                    let code = candidate.content.parts[0].text;
-                    
-                    // Basic cleanup: Remove markdown fencing if present, though model should be instructed not to include it
+                if (response.ok) {
+                    // The function returns the raw generated Lua code text
+                    let code = resultText.trim(); 
+                    // Basic cleanup: Remove markdown fencing if present
                     code = code.replace(/```lua\n?|```/g, '').trim(); 
-                    
                     setGeneratedCode(code);
                 } else {
-                    console.error("API response error:", result);
-                    setError("Failed to generate code. Check API response structure.");
+                    // Handle errors returned by the Netlify Function
+                    console.error("Proxy Error:", resultText);
+                    let errorMessage = "An unknown error occurred in the proxy.";
+                    try {
+                        const errorJson = JSON.parse(resultText);
+                        errorMessage = errorJson.message || errorMessage;
+                    } catch {
+                        // If it's not JSON, use the raw text
+                        errorMessage = resultText;
+                    }
+                    setError(`Proxy/API Error: ${errorMessage}. Check Netlify logs.`);
                 }
 
             } catch (err) {
                 console.error('Fetch error:', err);
-                // Note: This error is often the CORS block itself.
-                setError(`Network or API error: ${err.message}. If running outside Canvas, check CORS and API Key.`);
+                // Note: This error usually means a network issue or a Netlify configuration problem.
+                setError(`Network Error: ${err.message}. Check the network tab or Netlify deploy logs.`);
             } finally {
                 setIsLoading(false);
             }
