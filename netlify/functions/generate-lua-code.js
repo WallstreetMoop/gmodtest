@@ -24,7 +24,6 @@ exports.handler = async (event) => {
     }
 
     // 1. Get API Key and Validate
-    // This key must now be an OpenRouter key
     const apiKey = process.env.GEMINI_API_KEY; 
     if (!apiKey) {
         return buildErrorResponse(500, 'Server configuration error: GEMINI_API_KEY (OpenRouter Key) not set.');
@@ -38,8 +37,18 @@ exports.handler = async (event) => {
         return buildErrorResponse(400, 'Invalid JSON body in request.');
     }
 
-    // Default to a highly capable, fast model on OpenRouter
-    const modelName = incomingPayload.model || 'google/gemini-3-pro-preview';
+    // --- FIX START: Force OpenRouter Compatible Model Name ---
+    // The client sends the Google-specific model name (e.g., 'gemini-2.5-flash-preview-09-2025').
+    // We must map it to the OpenRouter equivalent to avoid the 400 error.
+    const modelMap = {
+        'gemini-2.5-flash-preview-09-2025': 'google/gemini-2.5-flash',
+        'gemini-2.5-flash': 'google/gemini-2.5-flash',
+        // Add other models if needed, e.g., 'gemini-2.5-pro': 'google/gemini-2.5-pro'
+    };
+
+    const requestedModel = incomingPayload.model;
+    const modelName = modelMap[requestedModel] || 'google/gemini-2.5-flash';
+    // --- FIX END ---
     
     // 3. Transform the incoming Gemini payload into the OpenRouter/OpenAI format
     const messages = [];
@@ -64,9 +73,10 @@ exports.handler = async (event) => {
 
     // Construct the FINAL OpenRouter payload
     const finalApiPayload = {
-        model: modelName,
+        model: modelName, // Use the mapped model name
         messages: messages,
-        // Add additional settings if needed, like temperature: 0.7
+        // Optional: Ensure the model knows we want pure text
+        // stream: false, // Netlify functions can't easily stream
     };
 
 
