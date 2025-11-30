@@ -46,6 +46,13 @@ exports.handler = async (event) => {
 
             const luaCode = commandQueue.luaCode || '';
 
+            // If there is code, send it, and then clear the queue immediately.
+            if (luaCode) {
+                // CLEAR THE COMMAND AFTER SENDING IT TO ENSURE SINGLE EXECUTION
+                commandQueue.luaCode = '';
+                console.log('Successfully served and cleared Lua command from memory.');
+            }
+
             // The GMod poller expects the raw Lua code string, not JSON.
             // We return a plaintext response.
             return {
