@@ -1,0 +1,12 @@
+[build]
+  # The base directory where the build command will run (usually the root)
+  base = "/"
+  # The directory containing your serverless functions
+  functions = "netlify/functions"
+  # The directory to publish (where index.html lives)
+  publish = "/"
+
+[functions]
+  # Define the Node.js version to use for compatibility
+  node_bundler = "esbuild"
+  node_major_version = 18
