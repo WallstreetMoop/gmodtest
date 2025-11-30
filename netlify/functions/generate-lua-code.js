@@ -3,7 +3,7 @@
 
 // The OpenRouter endpoint for chat completions
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'openai/gpt-5'; // A fast, capable model suitable for code generation
+const MODEL = 'openai/gpt-4.1-mini'; // A fast, capable model suitable for code generation
 
 // --- System Instruction ---
 // This is the core logic that guides the AI's response.
