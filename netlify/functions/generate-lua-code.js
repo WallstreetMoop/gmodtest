@@ -33,32 +33,41 @@ exports.handler = async (event) => {
     }
     
     // 2. Parse the request body from the frontend
-    let payload;
+    let incomingPayload;
     try {
-        payload = JSON.parse(event.body);
+        incomingPayload = JSON.parse(event.body);
     } catch (e) {
         return buildErrorResponse(400, 'Invalid JSON body in request.');
     }
 
-    const modelName = payload.model || 'gemini-2.5-flash-preview-09-2025';
+    const modelName = incomingPayload.model || 'gemini-2.5-flash-preview-09-2025';
     const apiUrl = `${GEMINI_BASE_URL}${modelName}:generateContent?key=${apiKey}`;
 
-    // 3. Prepare the payload for the Google API (removing the model property used for proxy routing)
-    delete payload.model; 
+    // 3. IMPORTANT: Construct the FINAL payload sent to the Google API
+    // This ensures ONLY the required keys are present to prevent 400 errors.
+    const finalApiPayload = {
+        contents: incomingPayload.contents,
+        systemInstruction: incomingPayload.systemInstruction,
+        // Add generationConfig if the client sends it, otherwise ignore
+        ...(incomingPayload.generationConfig && { generationConfig: incomingPayload.generationConfig })
+    };
+
 
     // 4. Call the Gemini API securely
     try {
         const response = await fetch(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            // Use the cleaned finalApiPayload
+            body: JSON.stringify(finalApiPayload) 
         });
 
         // Get the full response body
         const result = await response.json();
         
         if (!response.ok) {
-            // Handle errors from the Google API itself
+            // Log the error from Google API for debugging in Netlify logs
+            console.error("Google API Error:", result);
             const errorMessage = result.error?.message || 'Gemini API returned an error.';
             return buildErrorResponse(response.status, errorMessage);
         }
@@ -66,6 +75,8 @@ exports.handler = async (event) => {
         const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!generatedText) {
+            // Log if content is unexpectedly empty
+            console.error("API response missing text content:", result);
             return buildErrorResponse(500, 'Failed to extract generated Lua code from API response.');
         }
 
