@@ -3,7 +3,7 @@
 
 // The OpenRouter endpoint for chat completions
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'openai/gpt-4o-mini'; // A fast, capable model suitable for code generation
+const MODEL = 'deepseek/deepseek-chat-v3.1'; // A fast, capable model suitable for code generation
 
 // --- System Instruction ---
 // This is the core logic that guides the AI's response.
