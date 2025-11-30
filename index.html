@@ -3,272 +3,247 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GMod Stream Code Generator</title>
-    <!-- Tailwind CSS CDN -->
+    <title>GMod Stream Controller</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Inter Font Configuration -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap">
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
     <style>
         body {
-            font-family: 'Inter', sans-serif;
-            margin: 0;
+            background-color: #0f172a;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .code-block {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background-color: #1e293b;
+            border: 1px solid #334155;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
         }
     </style>
-    <!-- React, ReactDOM, and Babel CDNs -->
-    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
+    <div id="root"></div>
 
-<div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-<script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
+        function App() {
+            const [input, setInput] = useState("");
+            const [lastCode, setLastCode] = useState("");
+            const [status, setStatus] = useState("idle"); // idle, generating, queuing, success, error
+            const [statusMsg, setStatusMsg] = useState("Ready for input");
+            const [logs, setLogs] = useState([]);
 
-    // --- API Configuration ---
-    // The API key is now securely stored on Netlify's server and handled by the function.
-    // The frontend calls the Netlify Function endpoint directly.
-    const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-    // This is the endpoint for the Netlify Function we will create in the next file.
-    const apiUrl = '/.netlify/functions/generate-lua-code'; 
-
-    // Helper for exponential backoff
-    const fetchWithRetry = async (url, options, retries = 3) => {
-        for (let i = 0; i < retries; i++) {
-            try {
-                const response = await fetch(url, options);
-                if (response.ok) {
-                    return response;
-                }
-                // If response is not OK, maybe it's a 429 rate limit error, wait and retry
-                await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000 + Math.random() * 1000));
-            } catch (error) {
-                // Handle network errors
-                if (i === retries - 1) throw error;
-                await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000 + Math.random() * 1000));
-            }
-        }
-        throw new Error('API request failed after multiple retries.');
-    };
-
-    // --- Main Component ---
-    const App = () => {
-        const [mapName, setMapName] = useState('gm_construct');
-        const [chatRequest, setChatRequest] = useState('Spawn 5 headcrabs near the player and make them friendly.');
-        const [generatedCode, setGeneratedCode] = useState('');
-        const [isLoading, setIsLoading] = useState(false);
-        const [error, setError] = useState(null);
-        const [fullSystemPrompt, setFullSystemPrompt] = useState('');
-        const [copyMessage, setCopyMessage] = useState(''); // State for copy notification
-
-        // Define the core rules as the System Instruction
-        const baseSystemPrompt = `
-            You are an expert Garry's Mod Lua programmer. Your sole task is to generate a single, complete block of serverside Lua code that fulfills the user's request. 
-            
-            The code MUST NOT contain markdown or extra commentary, only the executable Lua script.
-            
-            Current Map Context: \${mapName}
-            
-            Ground Rules for Code Generation:
-            1. Keep effects temporary (a few seconds up to a minute). Use timers (timer.Simple) for disruptive or temporary effects (e.g., entity fading, physics changes) to automatically revert or clean up.
-            2. DO NOT crash the game (avoid loops without yield, massive resource spawns). Avoid real malicious activities. Joking/fake malicious actions (like displaying a fake IP address) are permitted.
-            3. Prevent softlocks. Any code that affects important game progress (e.g., required keys, exits, player movement) must revert or clean up after a brief timer. Hiding an entity should use a timer to show it again.
-            4. Tone down permanent cheaty actions. Make powerful buffs/spawns very temporary (e.g., invincibility for 5 seconds, gravity change for 10 seconds).
-            5. Use standard Garry's Mod/Half-Life 2 serverside functions (e.g., player.GetAll(), util.Blast, ents.Create, Entity:SetPos, Entity:Remove, timer.Simple).
-        `;
-
-        // Construct the final prompt for the LLM
-        const constructPrompt = useCallback(() => {
-            const fullPrompt = baseSystemPrompt.replace('\${mapName}', mapName);
-            setFullSystemPrompt(fullPrompt);
-            return fullPrompt;
-        }, [mapName]);
-
-        const handleGenerateCode = async () => {
-            if (!chatRequest.trim()) {
-                setError("Please enter a chat request.");
-                return;
-            }
-
-            setIsLoading(true);
-            setError(null);
-            setGeneratedCode('');
-            const systemInstruction = constructPrompt();
-
-            // The payload sent to the Netlify Function (Proxy)
-            const payload = {
-                contents: [{ 
-                    parts: [{ text: `Generate Lua code for this request: "${chatRequest}"` }] 
-                }],
-                systemInstruction: { 
-                    parts: [{ text: systemInstruction }] 
-                },
-                model: GEMINI_MODEL
+            const addLog = (msg, type = 'info') => {
+                const timestamp = new Date().toLocaleTimeString();
+                setLogs(prev => [{ time: timestamp, msg, type }, ...prev]);
             };
 
-            try {
-                // Call the Netlify Function
-                const response = await fetchWithRetry(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+            const handleSend = async () => {
+                if (!input.trim()) return;
 
-                const resultText = await response.text();
+                const currentRequest = input;
+                setInput(""); // Clear input immediately
+                setStatus("generating");
+                setStatusMsg("Asking AI to generate code...");
+                addLog(`Processing request: "${currentRequest}"`, 'info');
 
-                if (response.ok) {
-                    // The function returns the raw generated Lua code text
-                    let code = resultText.trim(); 
-                    // Basic cleanup: Remove markdown fencing if present
-                    code = code.replace(/```lua\n?|```/g, '').trim(); 
-                    setGeneratedCode(code);
-                } else {
-                    // Handle errors returned by the Netlify Function
-                    console.error("Proxy Error:", resultText);
-                    let errorMessage = "An unknown error occurred in the proxy.";
-                    try {
-                        const errorJson = JSON.parse(resultText);
-                        errorMessage = errorJson.message || errorMessage;
-                    } catch {
-                        // If it's not JSON, use the raw text
-                        errorMessage = resultText;
+                try {
+                    // Step 1: Generate Code via Netlify Function (OpenRouter Proxy)
+                    const genResponse = await fetch('/.netlify/functions/generate-lua-code', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: currentRequest })
+                    });
+
+                    if (!genResponse.ok) {
+                        throw new Error(`Generation failed: ${genResponse.statusText}`);
                     }
-                    setError(`Proxy/API Error: ${errorMessage}. Check Netlify logs.`);
+
+                    const genData = await genResponse.json();
+                    
+                    // Handle case where function returns { code: "..." } or just the text
+                    const luaCode = genData.code || genData.text || genData;
+                    
+                    if (!luaCode || typeof luaCode !== 'string') {
+                        throw new Error("Invalid response format from generator");
+                    }
+
+                    setLastCode(luaCode);
+                    addLog("Code generated successfully.", 'success');
+
+                    // Step 2: Queue Code via Netlify Function (Database/KV)
+                    setStatus("queuing");
+                    setStatusMsg("Sending code to GMod Server...");
+                    
+                    const queueResponse = await fetch('/.netlify/functions/command-queue', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: luaCode })
+                    });
+
+                    if (!queueResponse.ok) {
+                        throw new Error(`Queueing failed: ${queueResponse.statusText}`);
+                    }
+
+                    setStatus("success");
+                    setStatusMsg("Command sent to game!");
+                    addLog("Code queued for execution.", 'success');
+                    
+                    // Reset status after a delay
+                    setTimeout(() => {
+                        setStatus("idle");
+                        setStatusMsg("Ready for input");
+                    }, 3000);
+
+                } catch (err) {
+                    console.error(err);
+                    setStatus("error");
+                    setStatusMsg("Error: " + err.message);
+                    addLog(err.message, 'error');
                 }
+            };
 
-            } catch (err) {
-                console.error('Fetch error:', err);
-                // Note: This error usually means a network issue or a Netlify configuration problem.
-                setError(`Network Error: ${err.message}. Check the network tab or Netlify deploy logs.`);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        
-        const handleCopyCode = () => {
-            // Fallback for clipboard access in some environments
-            const tempArea = document.createElement('textarea');
-            tempArea.value = generatedCode;
-            document.body.appendChild(tempArea);
-            tempArea.select();
-            document.execCommand('copy');
-            document.body.removeChild(tempArea);
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                }
+            };
 
-            setCopyMessage('Code copied to clipboard!');
-            setTimeout(() => setCopyMessage(''), 3000); // Clear message after 3 seconds
-        };
-
-
-        // Style constants for Tailwind classes
-        const containerClasses = "max-w-4xl mx-auto p-4 md:p-8 bg-gray-900 min-h-screen text-white font-inter";
-        const cardClasses = "bg-gray-800 p-6 rounded-xl shadow-2xl mb-6";
-        const inputClasses = "w-full p-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out";
-        const buttonClasses = "w-full py-3 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg transition duration-150 ease-in-out disabled:bg-gray-500 disabled:cursor-not-allowed flex items-center justify-center";
-        const codeClasses = "p-4 bg-black text-lime-400 rounded-lg overflow-x-auto text-sm shadow-inner";
-        const titleClasses = "text-3xl font-extrabold mb-2 text-blue-400";
-        const subtitleClasses = "text-lg text-gray-400 mb-6";
-
-        return (
-            <div className={containerClasses}>
-                <header className="text-center mb-10">
-                    <h1 className={titleClasses}>GMod Stream Control</h1>
-                    <p className={subtitleClasses}>AI-Generated Lua Code from Chat Requests</p>
-                </header>
-
-                <div className={cardClasses}>
-                    <h2 className="text-xl font-semibold mb-4 text-white">1. Input Stream Data</h2>
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium mb-1 text-gray-300">
-                                Current GMod Map Name (Context for AI)
-                            </label>
-                            <input
-                                type="text"
-                                value={mapName}
-                                onChange={(e) => setMapName(e.target.value)}
-                                className={inputClasses}
-                                placeholder="e.g., gm_construct, d1_trainstation_01"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium mb-1 text-gray-300">
-                                Chat Request / Command
-                            </label>
-                            <textarea
-                                value={chatRequest}
-                                onChange={(e) => setChatRequest(e.target.value)}
-                                className={`${inputClasses} h-24`}
-                                placeholder="e.g., Make the gravity really low for 10 seconds."
-                            />
-                        </div>
-                        <button 
-                            onClick={handleGenerateCode} 
-                            className={buttonClasses} 
-                            disabled={isLoading}
-                        >
-                            {isLoading ? (
-                                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                            ) : 'Generate Lua Code'}
-                        </button>
-                        {error && (
-                            <div className="p-3 bg-red-800 text-white rounded-lg border border-red-600">
-                                Error: {error}
+            return (
+                <div className="min-h-screen flex flex-col items-center justify-start p-6">
+                    <header className="w-full max-w-4xl mb-8 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+                                <i className="fa-solid fa-gamepad text-2xl text-white"></i>
                             </div>
-                        )}
-                    </div>
-                </div>
-                
-                <div className={cardClasses}>
-                    <h2 className="text-xl font-semibold mb-4 text-white">2. Generated Lua Code (Output)</h2>
-                    {generatedCode ? (
-                        <div className="space-y-4">
-                            <pre className={codeClasses}>
-                                {generatedCode}
-                            </pre>
-                            <button 
-                                onClick={handleCopyCode}
-                                className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg transition duration-150 ease-in-out"
-                            >
-                                Copy Code
-                            </button>
-                            <p className="text-sm text-gray-400 mt-2">
-                                This is the serverside Lua script ready to be sent to your GMod server.
-                            </p>
+                            <div>
+                                <h1 className="text-2xl font-bold tracking-tight">GMod Stream Controller</h1>
+                                <p className="text-slate-400 text-sm">AI Director &bull; Connected</p>
+                            </div>
                         </div>
-                    ) : (
-                        <p className="text-gray-400">Code will appear here after generation.</p>
-                    )}
+                        <div className={`px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-wider ${
+                            status === 'error' ? 'bg-red-500/20 text-red-400' :
+                            status === 'success' ? 'bg-green-500/20 text-green-400' :
+                            status !== 'idle' ? 'bg-blue-500/20 text-blue-400 animate-pulse' :
+                            'bg-slate-800 text-slate-400'
+                        }`}>
+                            {statusMsg}
+                        </div>
+                    </header>
+
+                    <main className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        {/* Left Column: Input & Controls */}
+                        <div className="lg:col-span-2 space-y-6">
+                            
+                            {/* Input Area */}
+                            <div className="bg-slate-800/50 p-1 rounded-xl border border-slate-700 shadow-xl backdrop-blur-sm">
+                                <textarea 
+                                    value={input}
+                                    onChange={(e) => setInput(e.target.value)}
+                                    onKeyDown={handleKeyDown}
+                                    placeholder="Type a scenario (e.g., 'Spawn a zombie horde behind the player', 'Give the player low gravity')..."
+                                    className="w-full h-32 bg-slate-900/80 text-white p-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none placeholder-slate-500"
+                                ></textarea>
+                                <div className="flex justify-end p-2">
+                                    <button 
+                                        onClick={handleSend}
+                                        disabled={status !== 'idle' && status !== 'error' && status !== 'success'}
+                                        className={`px-6 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center gap-2 ${
+                                            status === 'generating' || status === 'queuing' 
+                                            ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                                            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20 active:scale-95'
+                                        }`}
+                                    >
+                                        {status === 'generating' ? <i className="fa-solid fa-circle-notch fa-spin"></i> : 
+                                         status === 'queuing' ? <i className="fa-solid fa-cloud-arrow-up fa-fade"></i> :
+                                         <i className="fa-solid fa-paper-plane"></i>}
+                                        {status === 'generating' ? 'Generating...' : 
+                                         status === 'queuing' ? 'Sending...' : 'Send Command'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Last Generated Code View */}
+                            <div className="bg-slate-800/30 rounded-xl border border-slate-700 overflow-hidden">
+                                <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-700 flex justify-between items-center">
+                                    <span className="text-xs font-semibold text-slate-400 uppercase">Last Generated Lua</span>
+                                    <button 
+                                        onClick={() => {navigator.clipboard.writeText(lastCode)}}
+                                        className="text-slate-500 hover:text-white transition-colors text-xs"
+                                        title="Copy to Clipboard"
+                                    >
+                                        <i className="fa-regular fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                                <div className="p-4 overflow-x-auto">
+                                    <pre className="text-sm text-green-400 font-mono whitespace-pre-wrap">{lastCode || "// No code generated yet..."}</pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right Column: Activity Log */}
+                        <div className="lg:col-span-1">
+                            <div className="bg-slate-800/30 rounded-xl border border-slate-700 h-full flex flex-col max-h-[600px]">
+                                <div className="px-4 py-3 bg-slate-800/80 border-b border-slate-700">
+                                    <span className="text-xs font-semibold text-slate-400 uppercase">System Logs</span>
+                                </div>
+                                <div className="p-4 overflow-y-auto flex-1 space-y-3 custom-scrollbar">
+                                    {logs.length === 0 && (
+                                        <div className="text-center text-slate-600 text-sm py-10">
+                                            No activity recorded
+                                        </div>
+                                    )}
+                                    {logs.map((log, idx) => (
+                                        <div key={idx} className="flex gap-3 text-sm animate-fade-in">
+                                            <span className="text-slate-500 text-xs font-mono pt-1">{log.time}</span>
+                                            <span className={`${
+                                                log.type === 'error' ? 'text-red-400' : 
+                                                log.type === 'success' ? 'text-green-400' : 
+                                                'text-slate-300'
+                                            }`}>
+                                                {log.msg}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                    </main>
                 </div>
+            );
+        }
 
-                <div className={cardClasses}>
-                    <h2 className="text-xl font-semibold mb-4 text-white">3. System Prompt Used (Reference)</h2>
-                    <pre className={`${codeClasses} text-gray-300`}>
-                        {fullSystemPrompt || "System prompt generated upon first generation."}
-                    </pre>
-                    <p className="text-sm text-gray-400 mt-2">
-                        This instruction set, including your specific ground rules, guides the AI model.
-                    </p>
-                </div>
-                
-                {/* Custom Copy Notification */}
-                {copyMessage && (
-                    <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 bg-green-600 text-white font-medium rounded-xl shadow-2xl z-50 animate-bounce">
-                        {copyMessage}
-                    </div>
-                )}
-            </div>
-        );
-    };
-
-    // Render the main component
-    const container = document.getElementById('root');
-    const root = ReactDOM.createRoot(container);
-    root.render(<App />);
-</script>
-
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
