@@ -39,7 +39,7 @@ exports.handler = async (event) => {
     }
 
     // Default to a highly capable, fast model on OpenRouter
-    const modelName = incomingPayload.model || 'google/gemini-2.5-flash';
+    const modelName = incomingPayload.model || 'google/gemini-3-pro-preview';
     
     // 3. Transform the incoming Gemini payload into the OpenRouter/OpenAI format
     const messages = [];
