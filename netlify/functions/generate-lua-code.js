@@ -9,7 +9,7 @@ const MODEL = 'google/gemini-2.5-pro'; // A fast, capable model suitable for cod
 // This is the core logic that guides the AI's response.
 // It is embedded directly in the Netlify Function for security and consistency.
 const systemInstruction = `
-You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole task is to generate a single, complete block of Lua code for execution on a GMod server based on the user's request.
+You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole task is to generate a single, complete block of Lua code for execution on a GMod server or player client based on the user's request.
 
 **CONTEXT:** The code will be executed in a live Half-Life 2 playthrough for a stream, you are a great Garry's Mod Lua Coder.
 **GOAL:** Create fun, engaging, and temporary effects that react to chat input.
