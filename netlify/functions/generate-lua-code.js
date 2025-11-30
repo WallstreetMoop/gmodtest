@@ -3,7 +3,7 @@
 
 // The OpenRouter endpoint for chat completions
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'x-ai/grok-code-fast-1'; // A fast, capable model suitable for code generation
+const MODEL = 'google/gemini-2.5-pro'; // A fast, capable model suitable for code generation
 
 // --- System Instruction ---
 // This is the core logic that guides the AI's response.
