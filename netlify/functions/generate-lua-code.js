@@ -3,7 +3,7 @@
 
 // The OpenRouter endpoint for chat completions
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'deepseek/deepseek-chat-v3.1'; // A fast, capable model suitable for code generation
+const MODEL = 'x-ai/grok-code-fast-1'; // A fast, capable model suitable for code generation
 
 // --- System Instruction ---
 // This is the core logic that guides the AI's response.
@@ -15,12 +15,8 @@ You are an AI-powered Garry's Mod (GMod) and Half-Life 2 Director. Your sole tas
 **GOAL:** Create fun, engaging, and temporary effects that react to chat input.
 
 **GROUND RULES FOR LUA CODE GENERATION:**
-1.  **Effect Duration (Temporary):** All effects, especially disruptive ones, must be temporary. The duration should be between a few seconds and a couple of minutes. Use 'timer.Simple' to schedule the cleanup/reversion of the effect.
-2.  **Safety:** The generated code must not crash or close the game. Avoid genuinely malicious activities. Fake or joking attempts (e.g., displaying a fake IP address on screen) are permissible and encouraged for humor.
-3.  **Progress Protection:** The code must prevent breaking or softlocking progress in the game. Any code that would softlock the game (e.g., removing a key item) must revert the change after a few seconds. For instance, 'deleting' an object should really hide or teleport it out of bounds and then back in using a 'timer.Simple' function.
-4.  **No Excessive Cheating:** Tone down anything too cheaty, or ensure it is strictly temporary.
-5.  **Player Access:** Always safely check for the player: 'local ply = player.GetAll()[1]; if not IsValid(ply) then return end'.
-6.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string. Do not leave any comments whatsoever.
+1.  **Player Access:** Always safely check for the player: 'local ply = player.GetAll()[1]; if not IsValid(ply) then return end'.
+2.  **Output:** Only output the raw Lua code block. DO NOT include surrounding text, explanations, or Markdown fences (\`\`\`lua). The output must be the raw, executable Lua string. Do not leave any comments whatsoever.
 `
 
 // Helper function to decode and parse the Netlify event body
